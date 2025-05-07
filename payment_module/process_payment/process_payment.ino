@@ -1,11 +1,14 @@
 #include <SPI.h>
 #include <MFRC522.h>
 
-#define RST_PIN 9
 #define SS_PIN 10
+#define RST_PIN 9
 
 MFRC522 rfid(SS_PIN, RST_PIN);
 MFRC522::Uid savedUid;
+
+String plate, balanceStr;
+long currentBalance = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -15,52 +18,78 @@ void setup() {
 }
 
 void loop() {
-  // Wait for card
   if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) {
     return;
   }
 
-  savedUid = rfid.uid;  // Store UID for future authentication
+  savedUid = rfid.uid;
 
-  // Read plate number from Block 2
+  // Read plate number (Block 2)
   byte block2[18];
   if (!readBlock(2, block2)) {
     Serial.println("Failed to read block 2");
-    haltAndStop();
+    haltCard();
     return;
   }
 
-  // Read balance from Block 4
+  // Read balance (Block 4)
   byte block4[18];
   if (!readBlock(4, block4)) {
     Serial.println("Failed to read block 4");
-    haltAndStop();
+    haltCard();
     return;
   }
 
-  // Convert byte arrays to strings
-  String plate = bytesToString(block2);
-  String balance = bytesToString(block4);
+  plate = bytesToString(block2);
+  balanceStr = bytesToString(block4);
+  currentBalance = balanceStr.toInt();
 
-  // Send to serial
   Serial.print("PLATE:");
   Serial.print(plate);
   Serial.print("|BALANCE:");
-  Serial.println(balance);
+  Serial.println(currentBalance);
 
-  haltAndStop(); // End session
-  delay(2000);   // Wait before next scan
+  // Wait for PAY command from PC
+  String command = waitForCommand();
+  if (command.startsWith("PAY:")) {
+    int amount = command.substring(4).toInt();
+    if (amount > 0 && currentBalance >= amount) {
+      long newBalance = currentBalance - amount;
+
+      // Write new balance
+      if (writeBlock(4, String(newBalance).c_str())) {
+        Serial.println("DONE");
+      } else {
+        Serial.println("FAIL");
+      }
+    } else {
+      Serial.println("FAIL");
+    }
+  }
+
+  haltCard();
+  delay(2000);
 }
 
-// Authenticate and read from a block
+// Wait for input from PC
+String waitForCommand() {
+  String input = "";
+  unsigned long start = millis();
+  while ((millis() - start) < 10000) {  // Timeout after 10 seconds
+    if (Serial.available()) {
+      input = Serial.readStringUntil('\n');
+      input.trim();
+      break;
+    }
+  }
+  return input;
+}
+
 bool readBlock(byte blockNum, byte* buffer) {
   MFRC522::MIFARE_Key key;
-  for (byte i = 0; i < 6; i++) key.keyByte[i] = 0xFF;  // Default key A
+  for (byte i = 0; i < 6; i++) key.keyByte[i] = 0xFF;
 
-  MFRC522::StatusCode status;
-
-  // Authenticate
-  status = rfid.PCD_Authenticate(
+  MFRC522::StatusCode status = rfid.PCD_Authenticate(
     MFRC522::PICC_CMD_MF_AUTH_KEY_A, blockNum, &key, &savedUid
   );
   if (status != MFRC522::STATUS_OK) {
@@ -70,15 +99,29 @@ bool readBlock(byte blockNum, byte* buffer) {
 
   byte size = 18;
   status = rfid.MIFARE_Read(blockNum, buffer, &size);
+  return status == MFRC522::STATUS_OK;
+}
+
+bool writeBlock(byte blockNum, const char* data) {
+  MFRC522::MIFARE_Key key;
+  for (byte i = 0; i < 6; i++) key.keyByte[i] = 0xFF;
+
+  MFRC522::StatusCode status = rfid.PCD_Authenticate(
+    MFRC522::PICC_CMD_MF_AUTH_KEY_A, blockNum, &key, &savedUid
+  );
   if (status != MFRC522::STATUS_OK) {
-    Serial.print("Read failed for block "); Serial.println(blockNum);
+    Serial.print("Auth failed for block "); Serial.println(blockNum);
     return false;
   }
 
-  return true;
+  byte buffer[16];
+  memset(buffer, 0, 16);
+  strncpy((char*)buffer, data, 16);
+
+  status = rfid.MIFARE_Write(blockNum, buffer, 16);
+  return status == MFRC522::STATUS_OK;
 }
 
-// Convert block data to string
 String bytesToString(byte* buffer) {
   String result = "";
   for (int i = 0; i < 16; i++) {
@@ -88,8 +131,7 @@ String bytesToString(byte* buffer) {
   return result;
 }
 
-// Cleanup function to halt card and stop encryption
-void haltAndStop() {
+void haltCard() {
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
 }
