@@ -9,9 +9,8 @@ from datetime import datetime
 # Config
 LOG_FILE = "data/plates_log.csv"
 TX_FILE = "data/transactions.csv"
-RATE_PER_HOUR = 200  # RWF per hour
+RATE_PER_HOUR = 500  # RWF per hour
 ser = None
-
 
 def detect_arduino_port():
     ports = list(serial.tools.list_ports.comports())
@@ -27,8 +26,7 @@ def detect_arduino_port():
             return port_name
     return None
 
-
-def listen_to_arduino(arduino_port, baud=9600):
+def listen_to_arduino(arduino_port, baud=115200):
     global ser
     try:
         ser = serial.Serial(arduino_port, baud, timeout=2)
@@ -49,7 +47,6 @@ def listen_to_arduino(arduino_port, baud=9600):
         if 'ser' in locals() and ser.is_open:
             ser.close()
 
-
 def process_message(message):
     if "PLATE:" in message and "BALANCE:" in message:
         try:
@@ -68,7 +65,6 @@ def process_message(message):
     else:
         print("⚠️ Unrecognized format.")
 
-
 def lookup_entry_time(plate):
     if not os.path.exists(LOG_FILE):
         return None
@@ -79,7 +75,6 @@ def lookup_entry_time(plate):
             if row['Plate Number'] == plate and row['Payment Status'] == '0':
                 return datetime.fromisoformat(row['Entry Timestamp'])
     return None
-
 
 def update_payment_status_in_log(plate, exit_time, action_type="EXIT"):
     rows = []
@@ -104,7 +99,6 @@ def update_payment_status_in_log(plate, exit_time, action_type="EXIT"):
         print("📝 Updated plates_log.csv with full exit info")
     else:
         print("⚠️ No matching unpaid plate record found to update")
-
 
 def compute_and_log_payment(plate, entry_time, balance):
     now = datetime.now()
@@ -151,7 +145,7 @@ def compute_and_log_payment(plate, entry_time, balance):
         print("✅ Payment completed by Arduino.")
 
         if not already_paid:
-            update_payment_status_in_log(plate,now)
+            update_payment_status_in_log(plate, now)
 
         # Log the transaction
         os.makedirs(os.path.dirname(TX_FILE), exist_ok=True)
@@ -173,7 +167,6 @@ def compute_and_log_payment(plate, entry_time, balance):
             })
     else:
         print(f"❌ Payment failed or no DONE signal: {response}")
-
 
 if __name__ == "__main__":
     port = detect_arduino_port()

@@ -11,7 +11,7 @@ String plate, balanceStr;
 long currentBalance = 0;
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
   SPI.begin();
   rfid.PCD_Init();
   Serial.println("🔄 Arduino ready and waiting for RFID...");
@@ -19,7 +19,6 @@ void setup() {
 
 void loop() {
   if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) {
-    delay(100);
     return;
   }
 
@@ -70,11 +69,10 @@ void loop() {
   haltCard();
 }
 
-// Increased timeout to 7000ms
 String waitForCommand() {
   String input = "";
   unsigned long start = millis();
-  while ((millis() - start) < 7000) {
+  while ((millis() - start) < 2000) {
     if (Serial.available()) {
       input = Serial.readStringUntil('\n');
       input.trim();
