@@ -66,7 +66,6 @@ def dashboard_data():
             SUM(CASE WHEN payment_status = 0 THEN 1 ELSE 0 END) as unpaid_vehicles,
             SUM(CASE WHEN payment_status = 1 THEN 1 ELSE 0 END) as paid_vehicles
         FROM plates_log
-    
     ''')
     parking_status = dict(cursor.fetchone())
     
@@ -80,7 +79,7 @@ def dashboard_data():
     
     # Get recent transactions
     cursor.execute('''
-        SELECT t.*, p.plate_number
+        SELECT DISTINCT t.*, p.plate_number
         FROM transactions t
         JOIN plates_log p ON t.plate_number = p.plate_number
         ORDER BY t.exit_time DESC
@@ -100,15 +99,28 @@ def dashboard_data():
     
     # Get hourly statistics for the last 24 hours
     cursor.execute('''
-        SELECT strftime('%H', entry_timestamp) as hour,
-               COUNT(*) as entries
+        SELECT 
+            strftime('%H', entry_timestamp) as hour,
+            COUNT(*) as entries
         FROM plates_log
         WHERE entry_timestamp >= datetime('now', '-24 hours')
-        AND action_type = 'ENTRY'
         GROUP BY hour
         ORDER BY hour
     ''')
     hourly_stats = [dict(row) for row in cursor.fetchall()]
+    
+    # Create a complete 24-hour dataset
+    complete_hourly_stats = []
+    for hour in range(24):
+        hour_str = f"{hour:02d}"
+        # Find if we have data for this hour
+        hour_data = next((stat for stat in hourly_stats if stat['hour'] == hour_str), None)
+        complete_hourly_stats.append({
+            'hour': hour_str,
+            'entries': hour_data['entries'] if hour_data else 0
+        })
+    
+    print(f"[DEBUG] Hourly stats: {complete_hourly_stats}")  # Debug print
     
     conn.close()
     
@@ -117,7 +129,7 @@ def dashboard_data():
         'today_revenue': today_revenue,
         'recent_transactions': recent_transactions,
         'unauthorized_exits': unauthorized_exits,
-        'hourly_stats': hourly_stats
+        'hourly_stats': complete_hourly_stats
     })
 
 def monitor_database_changes():
