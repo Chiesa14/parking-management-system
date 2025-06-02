@@ -511,7 +511,7 @@
         if (!feed) return;
 
         // Add new activity
-        if (data.latest_activity) {
+        if (data.latest_activity.length) {
           const activity = data.latest_activity;
           const time = new Date(activity.entry_timestamp).toLocaleTimeString();
           const status =
