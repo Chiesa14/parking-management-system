@@ -95,11 +95,27 @@ def is_payment_complete(plate_number):
             if diff_minutes <= 15:
                 return True, "[✅] Payment valid. Exiting within 15 minutes."
             else:
+                # Log unauthorized exit attempt
+                log_unauthorized_exit(plate_number, "Payment expired")
                 return False, "[⏱️] Payment expired. Please repay at kiosk."
         except Exception as e:
+            # Log unauthorized exit attempt
+            log_unauthorized_exit(plate_number, f"Error: {str(e)}")
             return False, f"[⚠️] Error parsing time: {e}"
+    
+    # Log unauthorized exit attempt
+    log_unauthorized_exit(plate_number, "No payment found")
     return False, "[❌] No successful payment found."
 
+def log_unauthorized_exit(plate_number, reason):
+    """Log unauthorized exit attempt in the database"""
+    timestamp = datetime.now().isoformat()
+    cursor.execute('''
+        INSERT INTO plates_log (plate_number, payment_status, entry_timestamp, exit_timestamp, action_type)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (plate_number, 0, timestamp, timestamp, 'UNAUTHORIZED_EXIT'))
+    conn.commit()
+    print(f"[LOGGED] Unauthorized exit attempt: {plate_number} - {reason}")
 
 # ===== Main Loop =====
 cap = cv2.VideoCapture(0)

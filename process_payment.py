@@ -124,6 +124,12 @@ def compute_and_log_payment(plate, entry_time, balance):
         duration = now - entry_time
 
     duration_hours = round(duration.total_seconds() / 3600, 2)
+    
+    # Round up to 1 hour if duration is less than 1 hour
+    if duration_hours < 1:
+        duration_hours = 1
+        print("⏰ Duration less than 1 hour, charging base rate of 1 hour")
+    
     amount_due = round(duration_hours * RATE_PER_HOUR)
     print(f"🕒 Duration: {duration_hours} hrs | 💸 Due: {amount_due} RWF")
 
