@@ -90,7 +90,7 @@ def process_message(message):
         print("⚠️ Unrecognized format.")
 
 def lookup_entry_time(plate):
-    cursor.execute("SELECT entry_timestamp FROM plates_log WHERE plate_number = ? AND payment_status = 0 ORDER BY entry_timestamp DESC LIMIT 1", (plate,))
+    cursor.execute("SELECT entry_timestamp FROM plates_log WHERE plate_number = ? ORDER BY entry_timestamp DESC LIMIT 1", (plate,))
     row = cursor.fetchone()
     if row:
         return datetime.fromisoformat(row[0])

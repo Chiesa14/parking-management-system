@@ -492,7 +492,6 @@
           "recent-transactions"
         );
         recentTransactions.innerHTML = data.recent_transactions
-          .slice(1)
           .map(
             (tx) => `
             <div class="activity-item">
@@ -511,7 +510,8 @@
         if (!feed) return;
 
         // Add new activity
-        if (data.latest_activity.length) {
+        if (data.latest_activity) {
+          console.log(data.latest_activity)
           const activity = data.latest_activity;
           const time = new Date(activity.entry_timestamp).toLocaleTimeString();
           const status =
