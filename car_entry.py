@@ -10,18 +10,28 @@ from collections import Counter
 import pandas as pd
 from datetime import datetime
 import random
+import sqlite3
 
 # Load YOLOv8 model
 model = YOLO('best3.pt')
 save_dir = 'plates'
 os.makedirs(save_dir, exist_ok=True)
 
-csv_file = 'data/plates_log.csv'
-if not os.path.exists(csv_file):
-    with open(csv_file, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(['Plate Number', 'Payment Status', 'Entry Timestamp', 'Exit Timestamp', 'Action Type'])
-
+# SQLite3 database setup
+db_file = 'data/parking.db'
+os.makedirs(os.path.dirname(db_file), exist_ok=True)
+conn = sqlite3.connect(db_file)
+cursor = conn.cursor()
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS plates_log (
+    plate_number TEXT,
+    payment_status INTEGER,
+    entry_timestamp TEXT,
+    exit_timestamp TEXT,
+    action_type TEXT
+)
+''')
+conn.commit()
 
 def detect_arduino_port():
     ports = list(serial.tools.list_ports.comports())
@@ -29,7 +39,6 @@ def detect_arduino_port():
         if any(x in port.device for x in ["ttyACM", "ttyUSB", "usbmodem", "wchusbserial", "COM"]):
             return port.device
     return None
-
 
 arduino_port = detect_arduino_port()
 arduino = None
@@ -80,34 +89,29 @@ def buzz(code):
 
 
 def read_parking_log():
-    try:
-        if os.path.exists(csv_file):
-            return pd.read_csv(csv_file)
-    except Exception as e:
-        print(f"[ERROR] Reading CSV: {e}")
-    return pd.DataFrame(columns=['Plate Number', 'Payment Status', 'Entry Timestamp', 'Exit Timestamp', 'Action Type'])
+    cursor.execute("SELECT * FROM plates_log")
+    rows = cursor.fetchall()
+    return pd.DataFrame(rows, columns=['Plate Number', 'Payment Status', 'Entry Timestamp', 'Exit Timestamp', 'Action Type'])
 
 
 def is_vehicle_in_parking(plate_number):
-    df = read_parking_log()
-    plate_records = df[df['Plate Number'] == plate_number]
-    if plate_records.empty:
-        return False
-    latest = plate_records.iloc[-1]
-    return latest['Action Type'] == 'ENTRY' and (pd.isna(latest['Exit Timestamp']) or latest['Exit Timestamp'] == '')
+    cursor.execute("SELECT * FROM plates_log WHERE plate_number = ? ORDER BY entry_timestamp DESC LIMIT 1", (plate_number,))
+    row = cursor.fetchone()
+    if row:
+        return row[4] == 'ENTRY' and (row[3] is None or row[3] == '')
+    return False
 
 
 def get_payment_status(plate_number):
-    df = read_parking_log()
-    plate_records = df[df['Plate Number'] == plate_number]
-    entry_records = plate_records[plate_records['Action Type'] == 'ENTRY']
-    if entry_records.empty:
-        return None
-    latest_entry = entry_records.iloc[-1]
-    entry_time = latest_entry['Entry Timestamp']
-    exit_records = plate_records[(plate_records['Action Type'] == 'EXIT') & (plate_records['Entry Timestamp'] == entry_time)]
-    if exit_records.empty:
-        return latest_entry['Payment Status']
+    cursor.execute("SELECT * FROM plates_log WHERE plate_number = ? AND action_type = 'ENTRY' ORDER BY entry_timestamp DESC LIMIT 1", (plate_number,))
+    entry_row = cursor.fetchone()
+    if entry_row:
+        entry_time = entry_row[2]
+        cursor.execute("SELECT * FROM plates_log WHERE plate_number = ? AND action_type = 'EXIT' AND entry_timestamp = ?", (plate_number, entry_time))
+        exit_row = cursor.fetchone()
+        if exit_row:
+            return None
+        return entry_row[1]
     return None
 
 
@@ -134,22 +138,22 @@ def validate_entry(plate_number):
 
 def log_entry(plate_number, payment_status=0):
     timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-    with open(csv_file, 'a', newline='') as f:
-        csv.writer(f).writerow([plate_number, payment_status, timestamp, '', 'ENTRY'])
+    cursor.execute("INSERT INTO plates_log (plate_number, payment_status, entry_timestamp, exit_timestamp, action_type) VALUES (?, ?, ?, ?, ?)",
+                   (plate_number, payment_status, timestamp, '', 'ENTRY'))
+    conn.commit()
     print(f"[LOGGED] Entry: {plate_number} at {timestamp}")
 
 
 def log_exit(plate_number):
     timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-    df = read_parking_log()
-    entries = df[(df['Plate Number'] == plate_number) & (df['Action Type'] == 'ENTRY') & ((df['Exit Timestamp'].isna()) | (df['Exit Timestamp'] == ''))]
-    if not entries.empty:
-        idx = entries.index[-1]
-        df.at[idx, 'Exit Timestamp'] = timestamp
-        df.to_csv(csv_file, index=False)
-        with open(csv_file, 'a', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow([plate_number, df.at[idx, 'Payment Status'], df.at[idx, 'Entry Timestamp'], timestamp, 'EXIT'])
+    cursor.execute("SELECT * FROM plates_log WHERE plate_number = ? AND action_type = 'ENTRY' AND (exit_timestamp IS NULL OR exit_timestamp = '') ORDER BY entry_timestamp DESC LIMIT 1", (plate_number,))
+    entry_row = cursor.fetchone()
+    if entry_row:
+        cursor.execute("UPDATE plates_log SET exit_timestamp = ? WHERE plate_number = ? AND entry_timestamp = ? AND action_type = 'ENTRY'",
+                       (timestamp, plate_number, entry_row[2]))
+        cursor.execute("INSERT INTO plates_log (plate_number, payment_status, entry_timestamp, exit_timestamp, action_type) VALUES (?, ?, ?, ?, ?)",
+                       (plate_number, entry_row[1], entry_row[2], timestamp, 'EXIT'))
+        conn.commit()
         print(f"[LOGGED] Exit: {plate_number} at {timestamp}")
     else:
         print(f"[ERROR] No entry record found for {plate_number}")
@@ -259,3 +263,4 @@ if arduino:
     arduino.close()
 cv2.destroyAllWindows()
 display_parking_status()
+conn.close()

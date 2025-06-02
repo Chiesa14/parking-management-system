@@ -1,4 +1,4 @@
-import csv
+import sqlite3
 import os
 import time
 import platform
@@ -7,10 +7,34 @@ import serial.tools.list_ports
 from datetime import datetime
 
 # Config
-LOG_FILE = "data/plates_log.csv"
-TX_FILE = "data/transactions.csv"
+db_file = "data/parking.db"
 RATE_PER_HOUR = 500  # RWF per hour
 ser = None
+
+# SQLite3 database setup
+os.makedirs(os.path.dirname(db_file), exist_ok=True)
+conn = sqlite3.connect(db_file)
+cursor = conn.cursor()
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS plates_log (
+    plate_number TEXT,
+    payment_status INTEGER,
+    entry_timestamp TEXT,
+    exit_timestamp TEXT,
+    action_type TEXT
+)
+''')
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS transactions (
+    plate_number TEXT,
+    entry_time TEXT,
+    exit_time TEXT,
+    duration_hr REAL,
+    amount INTEGER,
+    payment_status INTEGER
+)
+''')
+conn.commit()
 
 def detect_arduino_port():
     ports = list(serial.tools.list_ports.comports())
@@ -66,39 +90,16 @@ def process_message(message):
         print("⚠️ Unrecognized format.")
 
 def lookup_entry_time(plate):
-    if not os.path.exists(LOG_FILE):
-        return None
-
-    with open(LOG_FILE, newline='') as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            if row['Plate Number'] == plate and row['Payment Status'] == '0':
-                return datetime.fromisoformat(row['Entry Timestamp'])
+    cursor.execute("SELECT entry_timestamp FROM plates_log WHERE plate_number = ? AND payment_status = 0 ORDER BY entry_timestamp DESC LIMIT 1", (plate,))
+    row = cursor.fetchone()
+    if row:
+        return datetime.fromisoformat(row[0])
     return None
 
 def update_payment_status_in_log(plate, exit_time, action_type="EXIT"):
-    rows = []
-    updated = False
-    with open(LOG_FILE, newline='') as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            if row['Plate Number'] == plate and row['Payment Status'] == '0':
-                row['Payment Status'] = '1'
-                row['Exit Timestamp'] = exit_time.isoformat(sep=' ')
-                row['Action Type'] = action_type
-                updated = True
-            rows.append(row)
-
-    if updated:
-        with open(LOG_FILE, "w", newline='') as csvfile:
-            fieldnames = ['Plate Number', 'Payment Status', 'Entry Timestamp', 'Exit Timestamp', 'Action Type']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
-
-        print("📝 Updated plates_log.csv with full exit info")
-    else:
-        print("⚠️ No matching unpaid plate record found to update")
+    cursor.execute("UPDATE plates_log SET payment_status = 1, exit_timestamp = ?, action_type = ? WHERE plate_number = ? AND payment_status = 0", (exit_time.isoformat(sep=' '), action_type, plate))
+    conn.commit()
+    print("📝 Updated plates_log with full exit info")
 
 def compute_and_log_payment(plate, entry_time, balance):
     now = datetime.now()
@@ -106,14 +107,11 @@ def compute_and_log_payment(plate, entry_time, balance):
     last_exit_time = None
 
     # Check last payment record
-    if os.path.exists(TX_FILE):
-        with open(TX_FILE, newline='') as csvfile:
-            reader = csv.DictReader(csvfile)
-            for row in reversed(list(reader)):
-                if row['plate_number'] == plate:
-                    last_exit_time = datetime.fromisoformat(row['exit_time'])
-                    already_paid = True
-                    break
+    cursor.execute("SELECT exit_timestamp FROM plates_log WHERE plate_number = ? AND payment_status = 1 ORDER BY entry_timestamp DESC LIMIT 1", (plate,))
+    row = cursor.fetchone()
+    if row:
+        last_exit_time = datetime.fromisoformat(row[0])
+        already_paid = True
 
     if already_paid:
         time_diff = (now - last_exit_time).total_seconds() / 60
@@ -147,24 +145,14 @@ def compute_and_log_payment(plate, entry_time, balance):
         if not already_paid:
             update_payment_status_in_log(plate, now)
 
-        # Log the transaction
-        os.makedirs(os.path.dirname(TX_FILE), exist_ok=True)
-        file_exists = os.path.isfile(TX_FILE)
+        # Log the transaction in the transactions table
+        cursor.execute("INSERT INTO transactions (plate_number, entry_time, exit_time, duration_hr, amount, payment_status) VALUES (?, ?, ?, ?, ?, ?)",
+                       (plate, entry_time.isoformat() if not already_paid else last_exit_time.isoformat(), now.isoformat(), duration_hours, amount_due, 1))
+        conn.commit()
 
-        with open(TX_FILE, "a", newline='') as csvfile:
-            fieldnames = ['plate_number', 'entry_time', 'exit_time', 'duration_hr', 'amount', 'payment_status']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            if not file_exists:
-                writer.writeheader()
-
-            writer.writerow({
-                'plate_number': plate,
-                'entry_time': entry_time.isoformat() if not already_paid else last_exit_time.isoformat(),
-                'exit_time': now.isoformat(),
-                'duration_hr': duration_hours,
-                'amount': amount_due,
-                'payment_status': 1
-            })
+        # Update the exit timestamp and payment status in the plates_log table
+        cursor.execute("UPDATE plates_log SET exit_timestamp = ?, payment_status = 1 WHERE plate_number = ? AND payment_status = 0", (now.isoformat(), plate))
+        conn.commit()
     else:
         print(f"❌ Payment failed or no DONE signal: {response}")
 
@@ -174,3 +162,4 @@ if __name__ == "__main__":
         listen_to_arduino(port)
     else:
         print("❌ No Arduino port found.")
+    conn.close()

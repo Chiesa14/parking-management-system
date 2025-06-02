@@ -6,17 +6,28 @@ import os
 import time
 import serial
 import serial.tools.list_ports
-import csv
+import sqlite3
 from collections import Counter
 import random
 
 # Load YOLOv8 model
 model = YOLO('best3.pt')
 
-# CSV Files
-csv_file = 'data/plates_log.csv'
-transactions_file = 'data/transactions.csv'
-
+# SQLite3 database setup
+db_file = 'data/parking.db'
+os.makedirs(os.path.dirname(db_file), exist_ok=True)
+conn = sqlite3.connect(db_file)
+cursor = conn.cursor()
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS plates_log (
+    plate_number TEXT,
+    payment_status INTEGER,
+    entry_timestamp TEXT,
+    exit_timestamp TEXT,
+    action_type TEXT
+)
+''')
+conn.commit()
 
 # ===== Detect Arduino Port =====
 def detect_arduino_port():
@@ -74,26 +85,19 @@ def mock_ultrasonic_distance():
 
 # ===== Check Payment Status =====
 def is_payment_complete(plate_number):
-    if not os.path.exists(transactions_file):
-        return False, "[❌] No transaction history found."
-
-    with open(transactions_file, 'r') as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
-
-    for row in reversed(rows):
-        if row['plate_number'] == plate_number and row['payment_status'] == '1':
-            try:
-                exit_time = datetime.fromisoformat(row['exit_time'])
-                now = datetime.now()
-                diff_minutes = (now - exit_time).total_seconds() / 60
-                if diff_minutes <= 15:
-                    return True, "[✅] Payment valid. Exiting within 15 minutes."
-                else:
-                    return False, "[⏱️] Payment expired. Please repay at kiosk."
-            except Exception as e:
-                return False, f"[⚠️] Error parsing time: {e}"
-
+    cursor.execute("SELECT * FROM plates_log WHERE plate_number = ? AND payment_status = 1 ORDER BY entry_timestamp DESC LIMIT 1", (plate_number,))
+    row = cursor.fetchone()
+    if row:
+        try:
+            exit_time = datetime.fromisoformat(row[3])
+            now = datetime.now()
+            diff_minutes = (now - exit_time).total_seconds() / 60
+            if diff_minutes <= 15:
+                return True, "[✅] Payment valid. Exiting within 15 minutes."
+            else:
+                return False, "[⏱️] Payment expired. Please repay at kiosk."
+        except Exception as e:
+            return False, f"[⚠️] Error parsing time: {e}"
     return False, "[❌] No successful payment found."
 
 
@@ -176,7 +180,7 @@ while True:
 
                                     # Wait 15 seconds after buzzer starts
                                     print("[SYSTEM] Waiting 15 seconds after buzzer...")
-                                    time.sleep(5)
+                                    time.sleep(15)
                                     print("[SYSTEM] 15 second wait complete")
 
                 cv2.imshow("Plate", plate_img)
@@ -199,3 +203,4 @@ cap.release()
 if arduino:
     arduino.close()
 cv2.destroyAllWindows()
+conn.close()
