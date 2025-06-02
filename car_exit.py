@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import cv2
 from ultralytics import YOLO
 import pytesseract
@@ -10,10 +12,11 @@ from collections import Counter
 import random
 
 # Load YOLOv8 model (same model as entry)
-model = YOLO('/opt/homebrew/runs/detect/train4/weights/best.pt')
+model = YOLO('best.pt')
 
 # CSV log file
-csv_file = 'plates_log.csv'
+csv_file = 'data/plates_log.csv'
+transactions_file = 'data/transactions.csv'
 
 # ===== Auto-detect Arduino Serial Port =====
 def detect_arduino_port():
@@ -42,14 +45,27 @@ def mock_ultrasonic_distance():
 
 # ===== Check payment status in CSV =====
 def is_payment_complete(plate_number):
-    if not os.path.exists(csv_file):
-        return False
-    with open(csv_file, 'r') as f:
+    if not os.path.exists(transactions_file):
+        return False, "[❌] No transaction history found."
+
+    with open(transactions_file, 'r') as f:
         reader = csv.DictReader(f)
-        for row in reader:
-            if row['Plate Number'] == plate_number and row['Payment Status'] == '1':
-                return True
-    return False
+        rows = list(reader)
+
+    for row in reversed(rows):  # Check latest entries first
+        if row['plate_number'] == plate_number and row['payment_status'] == '1':
+            try:
+                exit_time = datetime.fromisoformat(row['exit_time'])
+                now = datetime.now()
+                diff_minutes = (now - exit_time).total_seconds() / 60
+                if diff_minutes <= 15:
+                    return True, "[✅] Payment valid. Exiting within 15 minutes."
+                else:
+                    return False, "[⏱️] Payment expired. Please repay at kiosk."
+            except Exception as e:
+                return False, f"[⚠️] Error parsing time: {e}"
+
+    return False, "[❌] No successful payment found."
 
 # ===== Webcam and Main Loop =====
 cap = cv2.VideoCapture(0)
@@ -98,7 +114,10 @@ while True:
                                 most_common = Counter(plate_buffer).most_common(1)[0][0]
                                 plate_buffer.clear()
 
-                                if is_payment_complete(most_common):
+                                is_paid, message = is_payment_complete(most_common)
+                                print(message)
+
+                                if is_paid:
                                     print(f"[ACCESS GRANTED] Payment complete for {most_common}")
                                     if arduino:
                                         arduino.write(b'1')  # Open gate
@@ -107,7 +126,8 @@ while True:
                                         arduino.write(b'0')  # Close gate
                                         print("[GATE] Closing gate (sent '0')")
                                 else:
-                                    print(f"[ACCESS DENIED] Payment NOT complete for {most_common}")
+                                    print(f"[ACCESS DENIED] Payment NOT complete or expired for {most_common}")
+                                    time.sleep(15)
                                     if arduino:
                                         arduino.write(b'2')  # Trigger warning buzzer
                                         print("[ALERT] Buzzer triggered (sent '2')")

@@ -14,11 +14,12 @@ void setup() {
   Serial.begin(9600);
   SPI.begin();
   rfid.PCD_Init();
-  Serial.println("Place your RFID card...");
+  Serial.println("🔄 Arduino ready and waiting for RFID...");
 }
 
 void loop() {
   if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) {
+    delay(100);
     return;
   }
 
@@ -27,7 +28,7 @@ void loop() {
   // Read plate number (Block 2)
   byte block2[18];
   if (!readBlock(2, block2)) {
-    Serial.println("Failed to read block 2");
+    Serial.println("❌ Failed to read block 2");
     haltCard();
     return;
   }
@@ -35,7 +36,7 @@ void loop() {
   // Read balance (Block 4)
   byte block4[18];
   if (!readBlock(4, block4)) {
-    Serial.println("Failed to read block 4");
+    Serial.println("❌ Failed to read block 4");
     haltCard();
     return;
   }
@@ -56,7 +57,6 @@ void loop() {
     if (amount > 0 && currentBalance >= amount) {
       long newBalance = currentBalance - amount;
 
-      // Write new balance
       if (writeBlock(4, String(newBalance).c_str())) {
         Serial.println("DONE");
       } else {
@@ -68,14 +68,13 @@ void loop() {
   }
 
   haltCard();
-  delay(2000);
 }
 
-// Wait for input from PC
+// Increased timeout to 7000ms
 String waitForCommand() {
   String input = "";
   unsigned long start = millis();
-  while ((millis() - start) < 10000) {  // Timeout after 10 seconds
+  while ((millis() - start) < 7000) {
     if (Serial.available()) {
       input = Serial.readStringUntil('\n');
       input.trim();
